@@ -9,6 +9,9 @@ local re = require "re"
 -- GET /clientes/[id]/extrato
 local reClientsPath = re.compile [[^/clientes/([0-9]+)/(transacoes|extrato)]]
 
+local function info(...)
+  print(...)
+end
 
 ERROR = {
   MISSING_OR_INVALID_PARAMS = 100,
@@ -17,40 +20,38 @@ ERROR = {
   UNKNOWN = 999,
 }
 
-local function transaction_create(client_id, type, value, description)
+local function transaction_create(client_id, tx)
   if not repo.select_client_exists(client_id) then
     return nil, ERROR.CLIENT_NOT_FOUND
   end
 
-  local value_with_sign = value
-  if type == 'd' then value_with_sign = -value end
-  local client = repo.update_client_balance(client_id, value_with_sign)
-  if not client then
+  local result = repo.insert_transaction(client_id, tx)
+  if result == '' then
     return nil, ERROR.CLIENT_LIMIT_INSUFFICIENT
   end
 
-  if not repo.insert_transaction(client_id, type, value, description) then
-    return nil, ERROR.UNKNOWN
-  end
-
-  return client
+  return result
 end
 
 local function client_statement(client_id)
-  local client = repo.select_client_with_timestamp(client_id)
-  if client == nil then
-    return nil, nil
+  if not repo.select_client_exists(client_id) then
+    return nil, ERROR.CLIENT_NOT_FOUND
   end
 
-  local transactions_latest10 = repo.select_transactions_lastest10(client_id)
+  local statement = repo.select_client_balance_with_transactions_latest10(client_id)
+  if statement == nil then
+    return nil, ERROR.UNKNOWN
+  end
 
-  return client, transactions_latest10
+  return statement
 end
 
 HANDLERS = {
   POST = {
     transacoes = function(client_id)
-      local params = DecodeJson(GetBody())
+      client_id = tonumber(client_id)
+      local body = GetBody()
+      local params = DecodeJson(body)
 
       if not (
             (params.tipo == 'c' or params.tipo == 'd')
@@ -63,68 +64,66 @@ HANDLERS = {
         Write(EncodeJson({
           error = ERROR.MISSING_OR_INVALID_PARAMS
         }))
+        info('transacoes', client_id, body, '=>', '{ error = ERROR.MISSING_OR_INVALID_PARAMS }')
         return
       end
 
-      local client, err = transaction_create(client_id, params.tipo, params.valor, params.descricao)
+      local result, err = transaction_create(client_id, body)
 
-      if client == nil then
-        if err == ERROR.CLIENT_NOT_FOUND then
-          SetStatus(404)
-          Write(EncodeJson({
-            error = ERROR.CLIENT_NOT_FOUND
-          }))
-        elseif err == ERROR.CLIENT_LIMIT_INSUFFICIENT then
-          SetStatus(422)
-          Write(EncodeJson({
-            error = ERROR.CLIENT_LIMIT_INSUFFICIENT
-          }))
-        else
-          SetStatus(500)
-          Write(EncodeJson({
-            error = ERROR.UNKNOWN
-          }))
-        end
-        return
-      end
-
-      SetStatus(200)
-      SetHeader('Content-Type', 'application/json')
-      Write(EncodeJson({
-        limite = client.limit,
-        saldo = client.balance,
-      }))
-    end,
-  },
-  GET = {
-    extrato = function(client_id)
-      local client, transactions_latest10 = client_statement(client_id)
-
-      if client == nil then
+      if err == ERROR.CLIENT_NOT_FOUND then
         SetStatus(404)
         Write(EncodeJson({
           error = ERROR.CLIENT_NOT_FOUND
         }))
+        print('transacoes', client_id, body, '=>', '{ error = ERROR.CLIENT_NOT_FOUND }')
+        return
+      elseif err == ERROR.CLIENT_LIMIT_INSUFFICIENT then
+        SetStatus(422)
+        Write(EncodeJson({
+          error = ERROR.CLIENT_LIMIT_INSUFFICIENT
+        }))
+        info('transacoes', client_id, body, '=>', '{ error = ERROR.CLIENT_LIMIT_INSUFFICIENT }')
+        return
+      elseif err ~= nil then
+        SetStatus(500)
+        Write(EncodeJson({
+          error = ERROR.UNKNOWN
+        }))
+        info('transacoes', client_id, body, '=>', '{ error = ERROR.UNKNOWN }')
         return
       end
 
       SetStatus(200)
       SetHeader('Content-Type', 'application/json')
-      Write(EncodeJson({
-        saldo = {
-          total = client.balance,
-          data_extrato = client.timestamp,
-          limite = client.limit,
-        },
-        ultimas_transacoes = map(transactions_latest10, function(tx)
-          return {
-            valor = tx.value,
-            tipo = tx.type,
-            descricao = tx.description,
-            realizada_em = tx.performed_at,
-          }
-        end)
-      }))
+      Write(result)
+      info('transacoes', client_id, body, '=>', result)
+    end,
+  },
+  GET = {
+    extrato = function(client_id)
+      client_id = tonumber(client_id)
+      local statement, err = client_statement(client_id)
+
+      if err == ERROR.CLIENT_NOT_FOUND then
+        SetStatus(404)
+        Write(EncodeJson({
+          error = ERROR.CLIENT_NOT_FOUND
+        }))
+        info('extrato', client_id, '=>', '{ error = ERROR.CLIENT_NOT_FOUND }')
+        return
+      elseif err ~= nil then
+        SetStatus(500)
+        Write(EncodeJson({
+          error = ERROR.UNKNOWN
+        }))
+        info('extrato', client_id, '=>', '{ error = ERROR.UNKNOWN }')
+        return
+      end
+
+      SetStatus(200)
+      SetHeader('Content-Type', 'application/json')
+      Write(statement)
+      info('extrato', client_id, '=>', statement)
     end,
   }
 }

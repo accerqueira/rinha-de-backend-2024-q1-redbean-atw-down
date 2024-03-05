@@ -13,5 +13,5 @@ function OnHttpRequest()
   local result = repo[query](params)
 
   SetStatus(200)
-  Write(EncodeJson(result))
+  Write(result)
 end
