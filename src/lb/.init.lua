@@ -27,7 +27,7 @@ function OnHttpRequest()
   if status then
     SetStatus(status)
     for k, v in pairs(headers) do
-      if string.lower(k) ~= "content-length" then
+      if string.lower(k) ~= "content-length" and string.lower(k) ~= "date" and string.lower(k) ~= "server" then
         SetHeader(k, v)
       end
     end
